@@ -4,6 +4,7 @@ import com.google.gson.Gson
 import com.google.gson.JsonParser
 import com.par9uet.jm.data.models.Comic
 import com.par9uet.jm.storage.ComicReadHistory
+import com.par9uet.jm.search.SearchBrowseRecord
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
@@ -19,17 +20,21 @@ data class PersonalComic(
 
 data class PersonalBackup(
     val format: String = "jm-personal-library",
-    val version: Int = 1,
+    val version: Int = 2,
     val records: Map<Int, PersonalComic> = emptyMap(),
     val readHistory: Map<Int, ComicReadHistory> = emptyMap(),
+    val searchBrowseHistory: Map<String, SearchBrowseRecord> = emptyMap(),
+    val createdAt: Long = System.currentTimeMillis(),
 )
 
 fun decodePersonalBackup(json: String): PersonalBackup {
     try {
         val root = JsonParser.parseString(json).asJsonObject
         require(root.get("format")?.asString == "jm-personal-library") { "请选择本应用导出的阅读记录备份" }
-        require(root.get("version")?.asInt == 1) { "暂不支持此备份版本" }
+        val version = root.get("version")?.asInt
+        require(version == 1 || version == 2) { "暂不支持此备份版本" }
         require(root.get("records")?.isJsonObject == true && root.get("readHistory")?.isJsonObject == true) { "备份内容不完整" }
+        if (version == 2) require(root.get("searchBrowseHistory")?.isJsonObject == true) { "备份缺少搜索进度" }
         val backup = Gson().fromJson(root, PersonalBackup::class.java)
         for ((id, entry) in backup.records) {
             requireNotNull(entry) { "备份作品记录为空" }
@@ -47,6 +52,15 @@ fun decodePersonalBackup(json: String): PersonalBackup {
             require(id > 0 && progress.lastChapterId >= 0 && progress.lastPageIndex >= 0 && progress.lastChapterPageCount >= 0) { "备份阅读进度不正确" }
             requireNotNull(progress.readChapterIds) { "备份章节记录为空" }
             require(progress.readChapterIds.all { it > 0 }) { "备份章节编号不正确" }
+        }
+        for ((key, record) in backup.searchBrowseHistory) {
+            requireNotNull(record) { "备份搜索记录为空" }
+            val query = requireNotNull(record.query) { "备份搜索条件为空" }
+            val position = requireNotNull(record.position) { "备份搜索位置为空" }
+            requireNotNull(query.text) { "备份搜索词为空" }
+            requireNotNull(query.order) { "备份搜索排序为空" }
+            requireNotNull(query.excludedTags) { "备份搜索排除标签为空" }
+            require(key == query.key() && position.page > 0 && position.index >= 0 && position.offset >= 0) { "备份搜索位置不正确" }
         }
         return backup
     } catch (e: IllegalArgumentException) {
@@ -102,8 +116,10 @@ class PersonalLibrary(
         }
     }
 
-    fun exportBackup(history: Map<Int, ComicReadHistory>): String =
-        Gson().toJson(PersonalBackup(records = records.value, readHistory = history))
+    fun exportBackup(
+        history: Map<Int, ComicReadHistory>,
+        searches: Map<String, SearchBrowseRecord> = emptyMap(),
+    ): String = Gson().toJson(PersonalBackup(records = records.value, readHistory = history, searchBrowseHistory = searches))
 
     @Synchronized
     fun restore(backup: PersonalBackup) {

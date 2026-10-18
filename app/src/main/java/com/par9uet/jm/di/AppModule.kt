@@ -61,6 +61,12 @@ val appModule = module {
         persist = { get<SecureStorage>().set("searchBrowseHistory", it) },
     ) }
     single { SecureStorage(get()) }
+    single { com.par9uet.jm.personal.PersonalBackupManager(get(), get(), get()) }
+    single { com.par9uet.jm.personal.GitHubBackupStore(get()) }
+    single { com.par9uet.jm.personal.GitHubBackupClient(
+        okhttp3.OkHttpClient.Builder().dns(get<DohManager>())
+            .callTimeout(60, java.util.concurrent.TimeUnit.SECONDS).build(),
+    ) }
     single { UserStorage(get()) }
     single { CookieStorage(get()) }
     single { LocalSettingStorage(get()) }

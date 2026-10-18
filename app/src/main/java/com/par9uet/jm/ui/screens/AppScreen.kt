@@ -72,6 +72,7 @@ fun AppScreen(
                 TabScreen(tabName = tabName)
             }
             composable("personalLibrary") { PersonalLibraryScreen() }
+            composable("cloudBackup") { CloudBackupScreen() }
             composable("login") { LoginScreen() }
             composable(route = "userCollectComic") { UserCollectComicScreen() }
             composable(route = "userHistoryComic") { UserHistoryComicScreen() }

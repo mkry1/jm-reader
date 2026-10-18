@@ -48,6 +48,14 @@ class SearchBrowseHistory(
         persist(updated)
         mutableRecords.value = updated
     }
+    fun restore(imported: Map<String, SearchBrowseRecord>) {
+        val updated = records.value.toMutableMap()
+        for ((key, incoming) in imported) {
+            if (incoming.updatedAt >= (updated[key]?.updatedAt ?: 0)) updated[key] = incoming
+        }
+        persist(updated)
+        mutableRecords.value = updated
+    }
     fun clear() {
         persist(emptyMap())
         mutableRecords.value = emptyMap()

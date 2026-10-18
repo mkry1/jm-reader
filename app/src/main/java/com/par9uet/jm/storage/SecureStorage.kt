@@ -21,6 +21,13 @@ class SecureStorage(
         }
     }
 
+    /** 访问凭据必须加密；加密不可用时不允许沿用普通数据的明文兼容回退。 */
+    fun <T> setEncrypted(key: String, value: T) {
+        saveEncryptedValue(gson.toJson(value), cryptoManager::encrypt) { ciphertext ->
+            sharedPreferences.edit { putString(key, ciphertext) }
+        }
+    }
+
     fun <T> get(key: String, type: java.lang.reflect.Type): T? {
         return try {
             getString(key)?.let {

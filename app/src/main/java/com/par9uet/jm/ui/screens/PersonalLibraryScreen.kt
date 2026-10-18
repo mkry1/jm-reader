@@ -32,9 +32,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.par9uet.jm.personal.PersonalBackup
 import com.par9uet.jm.personal.PersonalLibrary
+import com.par9uet.jm.personal.PersonalBackupManager
 import com.par9uet.jm.personal.decodePersonalBackup
+import com.par9uet.jm.personal.readBackupText
 import com.par9uet.jm.store.LocalSettingManager
-import com.par9uet.jm.store.ReadHistoryManager
 import com.par9uet.jm.ui.components.Comic
 import com.par9uet.jm.ui.components.CommonScaffold
 import com.par9uet.jm.ui.components.adaptiveComicGridCells
@@ -51,8 +52,8 @@ import org.koin.compose.viewmodel.koinActivityViewModel
 @Composable
 fun PersonalLibraryScreen(
     library: PersonalLibrary = getKoin().get(),
-    historyManager: ReadHistoryManager = getKoin().get(),
     settingsManager: LocalSettingManager = getKoin().get(),
+    backups: PersonalBackupManager = getKoin().get(),
     home: ComicViewModel = koinActivityViewModel(),
     recommendations: PersonalRecommendationViewModel = koinActivityViewModel(),
 ) {
@@ -67,17 +68,18 @@ fun PersonalLibraryScreen(
     var busy by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val navigation = LocalMainNavController.current
 
     val export = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
         if (uri != null) scope.launch {
             busy = true
             try {
-                val snapshot = library.exportBackup(historyManager.readHistoryState.value)
+                val snapshot = backups.snapshot()
                 withContext(Dispatchers.IO) {
                     requireNotNull(context.contentResolver.openOutputStream(uri, "wt")) { "无法写入备份文件" }
                         .bufferedWriter(Charsets.UTF_8).use { it.write(snapshot) }
                 }
-                message = "备份已保存，包含已读、喜欢、不感兴趣和阅读进度"
+                message = "备份已保存，包含阅读记录和搜索浏览进度"
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) { message = "备份保存失败，请重新选择位置"
             } finally { busy = false }
@@ -90,15 +92,7 @@ fun PersonalLibraryScreen(
                 pendingBackup = withContext(Dispatchers.IO) {
                     val text = requireNotNull(context.contentResolver.openInputStream(uri)) { "无法打开备份" }
                         .bufferedReader(Charsets.UTF_8).use { reader ->
-                            val chars = CharArray(16 * 1024 * 1024 + 1)
-                            var count = 0
-                            while (count < chars.size) {
-                                val read = reader.read(chars, count, chars.size - count)
-                                if (read < 0) break
-                                count += read
-                            }
-                            require(count < chars.size) { "备份文件过大" }
-                            String(chars, 0, count)
+                            readBackupText(reader)
                         }
                     decodePersonalBackup(text)
                 }
@@ -116,11 +110,10 @@ fun PersonalLibraryScreen(
         AlertDialog(
             onDismissRequest = { pendingBackup = null },
             title = { Text("合并阅读记录") },
-            text = { Text("导入 ${backup.records.size} 部作品的状态和 ${backup.readHistory.size} 条进度。已有作品保留较新的状态；本机已有的阅读进度优先。") },
+            text = { Text("导入 ${backup.records.size} 部作品的状态、${backup.readHistory.size} 条阅读进度和 ${backup.searchBrowseHistory.size} 条搜索进度。作品状态和搜索位置保留较新的记录；本机已有的阅读进度优先。") },
             confirmButton = {
                 TextButton(onClick = {
-                    library.restore(backup)
-                    historyManager.restoreReadHistory(backup.readHistory)
+                    backups.restore(backup)
                     pendingBackup = null
                     message = "阅读记录已合并"
                 }) { Text("导入") }
@@ -151,6 +144,7 @@ fun PersonalLibraryScreen(
                 }
             }
             FlowRow(Modifier.padding(horizontal = 8.dp)) {
+                TextButton(enabled = !busy, onClick = { navigation.navigate("cloudBackup") }) { Text("GitHub 云备份") }
                 TextButton(enabled = !busy, onClick = { export.launch("jm-reading-backup.json") }) { Text("导出备份") }
                 TextButton(enabled = !busy, onClick = { import.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }) { Text("导入备份") }
                 TextButton(enabled = !state.loading, onClick = { home.getHomeComic(); recommendations.refresh(likes) }) { Text("刷新推荐") }
