@@ -1129,6 +1129,7 @@ class ComicRepositoryImpl(
             price = price().orEmpty(),
             purchased = purchased().equals("true", ignoreCase = true),
             image = image().orEmpty(),
+            addtime = addTime(),
         )
     }
 

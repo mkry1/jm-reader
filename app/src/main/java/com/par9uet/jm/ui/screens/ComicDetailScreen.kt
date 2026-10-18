@@ -220,6 +220,7 @@ private fun ComicHeaderInfo(
             lineHeight = 1.25.em,
             fontWeight = FontWeight.Bold,
         )
+        com.par9uet.jm.ui.components.PersonalComicActions(comic)
         if (comic.authorList.isNotEmpty()) {
             FlowRow(
                 horizontalArrangement = Arrangement.spacedBy(6.dp),

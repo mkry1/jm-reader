@@ -24,12 +24,14 @@ fun ComicRelateListScreen(
     comicDetailViewModel: ComicDetailViewModel = koinActivityViewModel(),
     localSettingManager: LocalSettingManager = getKoin().get(),
 ) {
+    val library: com.par9uet.jm.personal.PersonalLibrary = getKoin().get()
+    val personalRecords by library.records.collectAsState()
     val comicDetailState by comicDetailViewModel.comicDetailState.collectAsState()
     val localSetting by localSettingManager.localSettingState.collectAsState()
     CommonScaffold(title = "相关本子") {
         if (comicDetailState.data != null) {
-            val relateList = remember(comicDetailState.data, localSetting.blockedTagList) {
-                comicDetailState.data?.relateComicList?.filterBlockedTags(localSetting.blockedTagList) ?: emptyList()
+            val relateList = remember(comicDetailState.data, localSetting.blockedTagList, personalRecords) {
+                library.recommend(comicDetailState.data?.relateComicList?.filterBlockedTags(localSetting.blockedTagList) ?: emptyList())
             }
             LazyVerticalGrid(
                 columns = adaptiveComicGridCells(),

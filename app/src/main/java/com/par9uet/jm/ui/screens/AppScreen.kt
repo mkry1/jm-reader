@@ -71,6 +71,7 @@ fun AppScreen(
                 val tabName = backStackEntry.arguments?.getString("tabName") ?: "home"
                 TabScreen(tabName = tabName)
             }
+            composable("personalLibrary") { PersonalLibraryScreen() }
             composable("login") { LoginScreen() }
             composable(route = "userCollectComic") { UserCollectComicScreen() }
             composable(route = "userHistoryComic") { UserHistoryComicScreen() }
@@ -154,8 +155,9 @@ fun AppScreen(
             }
             composable(route = "extractCode") { ExtractCodeScreen() }
             composable(
-                route = "comicSearchResult/{searchContent}?excludedTags={excludedTags}&mainTag={mainTag}",
+                route = "comicSearchResult/{searchContent}?excludedTags={excludedTags}&mainTag={mainTag}&resume={resume}",
                 arguments = listOf(
+                    navArgument(name = "resume") { type = NavType.StringType; defaultValue = "" },
                     navArgument(name = "searchContent") { type = NavType.StringType },
                     navArgument(name = "excludedTags") {
                         type = NavType.StringType
@@ -171,8 +173,12 @@ fun AppScreen(
                 val excludedTagsValue = backStackEntry.arguments?.getString("excludedTags") ?: ""
                 val excludedTags = deserializeExcludedTags(excludedTagsValue)
                 val mainTag = backStackEntry.arguments?.getInt("mainTag") ?: 0
-                LaunchedEffect(searchContent, excludedTagsValue, mainTag) {
-                    comicViewModel.changeSearchComicContent(searchContent, excludedTags, mainTag)
+                val resume = backStackEntry.arguments?.getString("resume").orEmpty()
+                LaunchedEffect(backStackEntry.id) {
+                    val query = resume.takeIf { it.isNotBlank() }?.let {
+                        runCatching { com.google.gson.Gson().fromJson(it, com.par9uet.jm.search.SearchBrowseQuery::class.java) }.getOrNull()
+                    }
+                    comicViewModel.openSearch(backStackEntry.id, searchContent, excludedTags, mainTag, query)
                 }
                 ComicSearchResultScreen()
             }

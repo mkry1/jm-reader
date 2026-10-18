@@ -31,6 +31,11 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import com.par9uet.jm.ui.components.PublicationRangeFilter
+import com.par9uet.jm.ui.components.rememberSearchBrowseGridState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -82,6 +87,9 @@ fun ComicSearchResultScreen(
     comicDetailViewModel: ComicDetailViewModel = koinActivityViewModel(),
     localSettingManager: LocalSettingManager = getKoin().get(),
 ) {
+    val browseHistory: com.par9uet.jm.search.SearchBrowseHistory = getKoin().get()
+    val loadedPage by comicViewModel.loadedSearchPage.collectAsState()
+    var resetBrowse by remember { mutableIntStateOf(0) }
     val mainNavController = LocalMainNavController.current
     val localSetting by localSettingManager.localSettingState.collectAsState()
     val comicSearchLazyPagingItems = comicViewModel.searchComicPager.collectAsLazyPagingItems()
@@ -127,7 +135,11 @@ fun ComicSearchResultScreen(
     val refreshState = comicSearchLazyPagingItems.loadState.refresh
     val isLoading = refreshState is LoadState.Loading
     val refreshError = refreshState as? LoadState.Error
-    val gridState = rememberComicPageGridState(pageState.page, comicSearchFilterState)
+    val browseQuery = comicViewModel.currentSearchQuery()
+    val gridState = rememberSearchBrowseGridState(
+        browseQuery, pageState, loadedPage, comicSearchLazyPagingItems, browseHistory, resetBrowse,
+        comicViewModel::rememberSearchPosition,
+    )
     val gridColumns = adaptiveComicGridCells(localSetting.searchGridColumns)
 
     CommonScaffold(
@@ -146,6 +158,12 @@ fun ComicSearchResultScreen(
                 currentOrder = comicSearchFilterState.order,
                 onOrderChange = { comicViewModel.changeSearchComicOrderFilter(it) },
             )
+            PublicationRangeFilter(comicSearchFilterState.publicationRange, comicViewModel::changePublicationRange)
+            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically) {
+                Text("第 ${pageState.page} 页 · 自动记住浏览位置", style = MaterialTheme.typography.bodySmall)
+                TextButton(onClick = { comicViewModel.restartSearch(); resetBrowse++ }) { Text("从头浏览") }
+            }
             if (isLoading) {
                 LinearProgressIndicator(
                     modifier = Modifier

@@ -46,6 +46,20 @@ val appModule = module {
         })
     }
 
+    single { com.par9uet.jm.personal.PersonalLibrary(
+        load = {
+            get<SecureStorage>().get<Map<Int, com.par9uet.jm.personal.PersonalComic>>(
+                "personalComicLibrary", object : com.google.gson.reflect.TypeToken<Map<Int, com.par9uet.jm.personal.PersonalComic>>() {}.type,
+            ) ?: emptyMap()
+        },
+        save = { records -> get<SecureStorage>().set("personalComicLibrary", records) },
+    ) }
+    single { com.par9uet.jm.search.SearchBrowseHistory(
+        load = { get<SecureStorage>().get<Map<String, com.par9uet.jm.search.SearchBrowseRecord>>(
+            "searchBrowseHistory", object : com.google.gson.reflect.TypeToken<Map<String, com.par9uet.jm.search.SearchBrowseRecord>>() {}.type,
+        ) ?: emptyMap() },
+        persist = { get<SecureStorage>().set("searchBrowseHistory", it) },
+    ) }
     single { SecureStorage(get()) }
     single { UserStorage(get()) }
     single { CookieStorage(get()) }

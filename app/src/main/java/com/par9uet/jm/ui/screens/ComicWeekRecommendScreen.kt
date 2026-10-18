@@ -21,6 +21,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.paging.LoadState
 import androidx.paging.compose.collectAsLazyPagingItems
+import com.par9uet.jm.personal.personalId
 import com.par9uet.jm.data.models.WeekData
 import com.par9uet.jm.ui.components.Comic
 import com.par9uet.jm.ui.components.ComicPagePreloadEffect
@@ -77,6 +78,8 @@ private fun ComicWeekCategorySelect(
 fun ComicWeekRecommendScreen(
     comicViewModel: ComicViewModel = koinActivityViewModel()
 ) {
+    val library: com.par9uet.jm.personal.PersonalLibrary = org.koin.compose.getKoin().get()
+    val personalRecords by library.records.collectAsState()
     val weekDataState by comicViewModel.weekDataState.collectAsState()
     val weekFilterState by comicViewModel.weekFilterState.collectAsState()
     val weekRecommendComicPagingItems = comicViewModel.weekComicPager.collectAsLazyPagingItems()
@@ -143,6 +146,7 @@ fun ComicWeekRecommendScreen(
                     .weight(1f),
                 lazyPagingItems = weekRecommendComicPagingItems,
                 key = { it.id },
+                itemVisible = { comic -> personalRecords[comic.personalId()]?.let { !it.read && !it.dismissed } ?: true },
                 columns = adaptiveComicGridCells(),
                 pageState = pageState,
                 onPageChange = comicViewModel.weekPagination::selectPage,

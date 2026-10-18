@@ -6,6 +6,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -14,6 +15,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ComicPageControllerTest {
+    @Test
+    fun restoresSavedPageAndRestartReturnsToFirstPage() = runBlocking {
+        val controller = ComicPageController()
+        controller.pagingFlow(
+            filters = kotlinx.coroutines.flow.flowOf("标签甲"),
+            initialPage = { 12 },
+        ) { FakeSource(1000, 80) }.first()
+        assertEquals(12, controller.state.value.page)
+        controller.restart()
+        assertEquals(1, controller.state.value.page)
+    }
+
+    @Test
+    fun forcedPaginationKeepsFortyItemPagesEvenForFortyFiveResults() = runBlocking {
+        val session = ComicPageSession(FakeSource(45, 80, forcePagination = true))
+        assertEquals(40, session.load(1).comics.size)
+        assertEquals((41..45).toList(), session.load(2).comics.map { it.id })
+    }
     @Test
     fun twelveItemWebsitePagesFillFortyItemDisplayPagesWithoutSkipping() = runBlocking {
         val source = FakeSource(134, 12)
@@ -272,11 +291,13 @@ class ComicPageControllerTest {
         private val reportTotal: Boolean = true,
         private val filter: ((Int) -> Boolean)? = null,
         private val allowNetworkPreload: Boolean = true,
+        private val forcePagination: Boolean = false,
     ) : ComicRemotePagingSource() {
         val requests = mutableListOf<Int>()
         var failedPage: Int? = null
         var beforeLoad: (suspend (Int) -> Unit)? = null
         override val hasLocalFilters: Boolean get() = filter != null
+        override val alwaysPaginate: Boolean get() = forcePagination
         override val remotePageSize: Int get() = pageSize
         override val supportsNetworkPreload: Boolean get() = allowNetworkPreload
 

@@ -1,5 +1,6 @@
 package com.par9uet.jm.ui.viewModel
 
+import com.par9uet.jm.search.*
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import androidx.paging.cachedIn
@@ -34,6 +35,9 @@ class ComicViewModel(
     private val comicRepository: ComicRepository,
     private val localSettingManager: LocalSettingManager,
     private val comicTagFilter: ComicTagFilter,
+    private val personalLibrary: com.par9uet.jm.personal.PersonalLibrary,
+    private val searchHistory: SearchBrowseHistory,
+    private val publicationDates: PublicationDateCache,
 ) : ViewModel() {
     data class HomeComicUIState(
         val isLoading: Boolean = true,
@@ -92,6 +96,56 @@ class ComicViewModel(
     private val _searchComicIdState = MutableStateFlow<Int?>(null)
     val searchComicIdState = _searchComicIdState.asStateFlow()
 
+    data class LoadedSearchPage(val query: SearchBrowseQuery, val page: Int, val ids: List<Int>)
+    private val mutableLoadedSearchPage = MutableStateFlow<LoadedSearchPage?>(null)
+    val loadedSearchPage = mutableLoadedSearchPage.asStateFlow()
+    private var activeSearchEntry: String? = null
+    private val entryFilters = mutableMapOf<String, SearchComicFilter>()
+
+    private fun SearchComicFilter.browseQuery() = SearchBrowseQuery(
+        text = searchContent, excludedTags = excludedTags, order = order.name, mainTag = mainTag,
+        source = apiSource, from = publicationRange?.from, until = publicationRange?.until,
+    )
+    fun currentSearchQuery(): SearchBrowseQuery {
+        val setting = localSettingManager.localSettingState.value
+        return _searchComicFilterState.value.copy(
+            excludedTags = (_searchComicFilterState.value.excludedTags + setting.blockedTagList).distinct(),
+            apiSource = "${setting.comicApiSource}|${setting.api}",
+        ).browseQuery()
+    }
+    fun rememberSearchPosition(query: SearchBrowseQuery, position: SearchBrowsePosition, ids: List<Int>) {
+        val loaded = mutableLoadedSearchPage.value ?: return
+        if (!searchPagination.state.value.isLoading && loaded.query.key() == query.key() &&
+            loaded.page == position.page && loaded.ids == ids && ids.isNotEmpty()) {
+            searchHistory.save(query, position)
+        }
+    }
+    fun restartSearch() {
+        searchHistory.restart(currentSearchQuery())
+        mutableLoadedSearchPage.value = null
+        searchPagination.restart()
+    }
+    fun openSearch(entry: String, text: String, excludedTags: List<String>, mainTag: Int, savedQuery: SearchBrowseQuery? = null) {
+        if (activeSearchEntry == entry) return
+        activeSearchEntry?.let { entryFilters[it] = _searchComicFilterState.value }
+        activeSearchEntry = entry
+        val allExclusions = (excludedTags + localSettingManager.localSettingState.value.blockedTagList).distinct().sorted()
+        val query = savedQuery ?: searchHistory.records.value.values
+            .filter { it.query.text == text && it.query.mainTag == mainTag && it.query.excludedTags.distinct().sorted() == allExclusions }
+            .maxByOrNull { it.updatedAt }?.query
+        val previousFilter = _searchComicFilterState.value
+        _searchComicFilterState.value = entryFilters[entry] ?: SearchComicFilter(
+            searchContent = text, excludedTags = excludedTags, mainTag = mainTag,
+            order = query?.order?.let { runCatching { ComicSearchOrderFilter.valueOf(it) }.getOrNull() } ?: ComicSearchOrderFilter.NEWEST,
+            publicationRange = query?.from?.let { from -> query.until?.let { PublicationRange(from, it) } },
+        )
+        if (previousFilter != _searchComicFilterState.value) mutableLoadedSearchPage.value = null
+    }
+    fun changePublicationRange(range: PublicationRange?) {
+        _searchComicIdState.value = null
+        _searchComicFilterState.update { it.copy(publicationRange = range, order = ComicSearchOrderFilter.NEWEST) }
+    }
+
     val searchPagination = ComicPageController()
     val searchComicPager = searchPagination.pagingFlow(
         filters = combine(_searchComicFilterState, localSettingManager.localSettingState) { filter, setting ->
@@ -100,6 +154,10 @@ class ComicViewModel(
                     apiSource = "${setting.comicApiSource}|${setting.api}",
             )
         },
+        initialPage = { searchHistory.find(it.browseQuery())?.position?.page ?: 1 },
+        onPageLoaded = { filter, state, comics ->
+            mutableLoadedSearchPage.value = LoadedSearchPage(filter.browseQuery(), state.page, comics.map { it.id })
+        },
     ) { filter ->
         SearchComicPagingSource(
             comicRepository = comicRepository,
@@ -107,6 +165,7 @@ class ComicViewModel(
             onFindSingleComicId = { id -> _searchComicIdState.value = id },
             tagFilter = comicTagFilter,
             tagSource = filter.apiSource,
+            dateCache = publicationDates,
         )
     }.cachedIn(viewModelScope)
 
@@ -114,7 +173,8 @@ class ComicViewModel(
         _searchComicIdState.update { null }
         _searchComicFilterState.update {
             it.copy(
-                order = order
+                order = order,
+                publicationRange = if (order == ComicSearchOrderFilter.NEWEST) it.publicationRange else null,
             )
         }
     }
@@ -218,20 +278,19 @@ class ComicViewModel(
 
     val weekPagination = ComicPageController()
     val weekComicPager = weekPagination.pagingFlow(
-        filters = combine(_weekFilterState, localSettingManager.localSettingState) { filter, setting ->
-            Triple(
-                filter,
-                (setting.blockedTagList + setting.homeExcludedTags).distinct(),
-                "${setting.comicApiSource}|${setting.api}",
-            )
+        filters = combine(_weekFilterState, localSettingManager.localSettingState, personalLibrary.records) { filter, setting, records ->
+            Triple(filter, (setting.blockedTagList + setting.homeExcludedTags).distinct(), "${setting.comicApiSource}|${setting.api}") to
+                records.filterValues { it.read || it.dismissed }.keys
         },
-    ) { (filter, blockedTags, source) ->
+    ) { (query, excludedIds) ->
+        val (filter, blockedTags, source) = query
         WeekComicPagingSource(
             comicRepository = comicRepository,
             filter = filter,
             blockedTagList = blockedTags,
             tagFilter = comicTagFilter,
             tagSource = source,
+            excludedIds = excludedIds,
         )
     }.cachedIn(viewModelScope)
 

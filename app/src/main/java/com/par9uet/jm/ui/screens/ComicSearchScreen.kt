@@ -69,6 +69,9 @@ fun ComicSearchScreen(
     historySearchManager: HistorySearchManager = getKoin().get(),
     localSettingManager: LocalSettingManager = getKoin().get(),
 ) {
+    val browseHistory: com.par9uet.jm.search.SearchBrowseHistory = getKoin().get()
+    val browseRecords by browseHistory.records.collectAsState()
+    val recentBrowse = remember(browseRecords) { browseRecords.values.sortedByDescending { it.updatedAt }.take(30) }
     val mainNavController = LocalMainNavController.current
     val focusRequester = remember { FocusRequester() }
     val searchComicFilterState by comicViewModel.searchComicFilterState.collectAsState()
@@ -182,8 +185,8 @@ fun ComicSearchScreen(
                         fontWeight = FontWeight.SemiBold,
                         color = MaterialTheme.colorScheme.onSurface
                     )
-                    if (historySearchState.isNotEmpty()) {
-                        TextButton(onClick = { historySearchManager.clear() }) {
+                    if (historySearchState.isNotEmpty() || recentBrowse.isNotEmpty()) {
+                        TextButton(onClick = { historySearchManager.clear(); browseHistory.clear() }) {
                             Icon(
                                 Icons.Rounded.DeleteSweep,
                                 contentDescription = null,
@@ -195,7 +198,7 @@ fun ComicSearchScreen(
                     }
                 }
             }
-            if (historySearchState.isEmpty()) {
+            if (historySearchState.isEmpty() && recentBrowse.isEmpty()) {
                 item {
                     Card(
                         modifier = Modifier.fillMaxWidth(),
@@ -222,7 +225,21 @@ fun ComicSearchScreen(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        historySearchState.forEach { tag ->
+                        recentBrowse.forEach { record ->
+                            val query = record.query
+                            val order = runCatching { com.par9uet.jm.data.models.ComicSearchOrderFilter.valueOf(query.order).label }.getOrDefault("最新")
+                            val dates = query.from?.let { " · $it 至 ${query.until}" }.orEmpty()
+                            val exclusions = if (query.excludedTags.isEmpty()) "" else " · 排除：${query.excludedTags.take(2).joinToString("、") }"
+                            ComicSearchHistoryTag(
+                                label = "${query.text} · 第${record.position.page}页 · $order$dates$exclusions",
+                                onClick = {
+                                    mainNavController.navigate(
+                                        "comicSearchResult/${Uri.encode(query.text)}?excludedTags=${Uri.encode(serializeExcludedTags(query.excludedTags))}&mainTag=${query.mainTag}&resume=${Uri.encode(query.key())}"
+                                    )
+                                },
+                            )
+                        }
+                        historySearchState.filterNot { text -> recentBrowse.any { it.query.text == text } }.forEach { tag ->
                             ComicSearchHistoryTag(
                                 label = tag,
                                 onClick = { search(tag) }

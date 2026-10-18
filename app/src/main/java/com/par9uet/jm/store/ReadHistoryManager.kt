@@ -96,6 +96,12 @@ class ReadHistoryManager(
         }?.key ?: chapterId
     }
 
+    fun restoreReadHistory(imported: Map<Int, ComicReadHistory>) {
+        val merged = imported + _readHistoryState.value
+        readHistoryStorage.set(merged)
+        _readHistoryState.value = merged
+    }
+
     override suspend fun init() {
         log("加载阅读历史")
         _readHistoryState.update { readHistoryStorage.get() }

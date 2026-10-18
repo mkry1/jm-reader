@@ -153,6 +153,8 @@ fun HomeScreen(
     userManager: UserManager = getKoin().get(),
     localSettingManager: LocalSettingManager = getKoin().get()
 ) {
+    val library: com.par9uet.jm.personal.PersonalLibrary = getKoin().get()
+    val personalRecords by library.records.collectAsState()
     val mainNavController = LocalMainNavController.current
     val homeComicState by comicViewModel.homeComicState.collectAsState()
     val isLogin by userManager.isLoginState.collectAsState(false)
@@ -234,8 +236,8 @@ fun HomeScreen(
         val allExcludedTags = remember(localSetting.blockedTagList, localSetting.homeExcludedTags) {
             (localSetting.blockedTagList + localSetting.homeExcludedTags).distinct()
         }
-        val comicList = remember(currentPageData, allExcludedTags) {
-            (currentPageData?.list ?: listOf()).filterBlockedTags(allExcludedTags)
+        val comicList = remember(currentPageData, allExcludedTags, personalRecords) {
+            library.recommend((currentPageData?.list ?: listOf()).filterBlockedTags(allExcludedTags))
         }
         val chipsScrollState = rememberScrollState()
         val pagination = rememberComicListPagination(
@@ -299,6 +301,9 @@ fun HomeScreen(
             ) {
                 item(span = { GridItemSpan(maxLineSpan) }) {
                     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        androidx.compose.material3.TextButton(onClick = { mainNavController.navigate("personalLibrary") }) {
+                            Text("为你推荐 · 已读记录 · 备份")
+                        }
                         HomeHeader(
                             categoryTitle = currentPageData?.title.orEmpty(),
                             onSearch = onSearch,
@@ -335,7 +340,7 @@ fun HomeScreen(
                                 tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.4f)
                             )
                             Text(
-                                text = if (allExcludedTags.isNotEmpty()) "当前分类的漫画均被标签排除过滤" else "暂无漫画",
+                                text = if (allExcludedTags.isNotEmpty()) "当前分类暂无符合条件的漫画" else "暂无未读漫画，可刷新或切换分类",
                                 style = MaterialTheme.typography.bodyLarge,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant
                             )

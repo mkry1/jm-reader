@@ -53,6 +53,7 @@ data class ComicPageState(
 /** Remote counts describe the unfiltered result, never Paging's requested loadSize. */
 abstract class ComicRemotePagingSource : PagingSource<Int, Comic>() {
     abstract val hasLocalFilters: Boolean
+    open val alwaysPaginate: Boolean = false
     open val remotePageSize: Int = COMIC_REMOTE_PAGE_SIZE
     // A metadata filter can issue many album-detail requests for one remote page.
     // Such sources may reuse cached pages, but must not start that work speculatively.
@@ -201,7 +202,7 @@ internal class ComicPageSession(
             reachedEnd -> start + candidates.size
             else -> null
         }
-        if (page > 1 && total != null && total < COMIC_PAGINATION_THRESHOLD) {
+        if (page > 1 && total != null && total < (if (source.alwaysPaginate) COMIC_DISPLAY_PAGE_SIZE + 1 else COMIC_PAGINATION_THRESHOLD)) {
             return loadPage(1, budget)
         }
         // A delete/refresh can invalidate the old last page. Recover without trapping the user.
@@ -209,7 +210,7 @@ internal class ComicPageSession(
             val lastPage = (((total ?: 0).toLong() + 39) / 40).toInt().coerceAtLeast(1)
             if (lastPage < page) return loadPage(lastPage, budget)
         }
-        val enabled = page > 1 || (total ?: candidates.size) >= COMIC_PAGINATION_THRESHOLD
+        val enabled = source.alwaysPaginate || page > 1 || (total ?: candidates.size) >= COMIC_PAGINATION_THRESHOLD
         val limit = if (enabled) COMIC_DISPLAY_PAGE_SIZE else COMIC_PAGINATION_THRESHOLD
         val hasNext = if (total != null) {
             total.toLong() > start.toLong() + limit
@@ -253,6 +254,13 @@ class ComicPageController {
         refreshVersion.update { it + 1 }
     }
 
+    fun restart() {
+        cancelPreload()
+        requestedPage.value = 1
+        _state.value = ComicPageState()
+        refreshVersion.update { it + 1 }
+    }
+
     /**
      * Called only by a visible screen after its items have arrived. The caller's
      * lifecycle owns this job, so leaving the screen also stops speculative work.
@@ -283,13 +291,16 @@ class ComicPageController {
     @OptIn(ExperimentalCoroutinesApi::class)
     fun <F : Any> pagingFlow(
         filters: Flow<F>,
+        initialPage: (F) -> Int = { 1 },
+        onPageLoaded: (F, ComicPageState, List<Comic>) -> Unit = { _, _, _ -> },
         sourceFactory: (F) -> ComicRemotePagingSource,
     ): Flow<PagingData<Comic>> = filters.distinctUntilChanged().flatMapLatest { filter ->
         cancelPreload()
         val token = Any()
         activeSession = token
-        requestedPage.value = 1
-        _state.value = ComicPageState()
+        val restoredPage = initialPage(filter).coerceAtLeast(1)
+        requestedPage.value = restoredPage
+        _state.value = ComicPageState(page = restoredPage)
         var session = ComicPageSession(sourceFactory(filter))
         currentSession = session
         var lastRefreshVersion = refreshVersion.value
@@ -316,6 +327,7 @@ class ComicPageController {
                                 currentCoroutineContext().ensureActive()
                                 if (activeSession === token && requestedPage.value == page && refreshVersion.value == refresh) {
                                     _state.value = result.state
+                                    onPageLoaded(filter, result.state, result.comics)
                                 }
                                 // No append/prepend keys: scrolling cannot fetch the next display page.
                                 return LoadResult.Page(result.comics, prevKey = null, nextKey = null)

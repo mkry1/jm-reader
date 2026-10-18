@@ -21,6 +21,9 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.par9uet.jm.personal.personalId
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,6 +67,20 @@ fun Comic(
         label = "comic-press",
     )
 
+    val library: com.par9uet.jm.personal.PersonalLibrary = getKoin().get()
+    val records by library.records.collectAsState()
+    val record = records[comic.personalId()]
+    var showActions by remember { mutableStateOf(false) }
+    if (showActions) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showActions = false },
+            title = { Text(comic.name) },
+            text = { PersonalComicActions(comic) },
+            confirmButton = {
+                androidx.compose.material3.TextButton(onClick = { showActions = false }) { Text("完成") }
+            },
+        )
+    }
     Card(
         modifier = modifier
             .fillMaxWidth()
@@ -80,7 +97,7 @@ fun Comic(
                 }
             },
             onLongClick = {
-                onLongClick?.invoke()
+                if (onLongClick != null) onLongClick() else showActions = true
             }
         ),
         shape = MaterialTheme.shapes.medium,
@@ -98,6 +115,18 @@ fun Comic(
         ) {
             Box {
                 ComicCoverImage(comic, modifier = Modifier.fillMaxWidth())
+                val status = listOfNotNull(
+                    "已读".takeIf { record?.read == true },
+                    "喜欢".takeIf { record?.liked == true },
+                    "不感兴趣".takeIf { record?.dismissed == true },
+                ).joinToString(" · ")
+                if (status.isNotEmpty()) {
+                    androidx.compose.material3.Surface(
+                        modifier = Modifier.align(Alignment.TopStart).padding(4.dp),
+                        color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = MaterialTheme.shapes.small,
+                    ) { Text(status, Modifier.padding(4.dp), style = MaterialTheme.typography.labelSmall) }
+                }
                 if (editing && selected) {
                     Checkbox(
                         checked = true,

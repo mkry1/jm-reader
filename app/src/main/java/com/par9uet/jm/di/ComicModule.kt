@@ -18,7 +18,15 @@ val comicModule = module {
     single { ComicTagCacheStorage(get()) }
     single { ComicTagFilter(get<ComicRepository>()::getComicDetail, get<ComicTagCacheStorage>()) }
 
-    viewModel { ComicViewModel(get(), get(), get()) }
+    single { com.par9uet.jm.search.PublicationDateCache(
+        fetchDetail = get<ComicRepository>()::getComicDetail,
+        load = { get<com.par9uet.jm.storage.SecureStorage>().get<Map<String, String>>(
+            "publicationDates", object : com.google.gson.reflect.TypeToken<Map<String, String>>() {}.type,
+        ) ?: emptyMap() },
+        persist = { get<com.par9uet.jm.storage.SecureStorage>().set("publicationDates", it) },
+    ) }
+    viewModel { ComicViewModel(get(), get(), get(), get(), get(), get()) }
+    viewModel { com.par9uet.jm.ui.viewModel.PersonalRecommendationViewModel(get()) }
     viewModel { ComicDetailViewModel(get(), get(), get(), get(), get(), get(), get()) }
     viewModel { ComicReadViewModel(get(), get(), get(), get(), get(), get()) }
 }

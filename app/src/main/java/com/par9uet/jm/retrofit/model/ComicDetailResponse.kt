@@ -30,6 +30,8 @@ data class ComicDetailResponse(
     // Some API responses include the cover directly. Keep it as a fallback when
     // the configured image host is unavailable (for example during DoH failures).
     val image: String? = null,
+    @SerializedName(value = "addtime", alternate = ["addTime", "add_time"])
+    val addtime: String? = null,
 ) {
     fun toComic(): Comic {
         return Comic(

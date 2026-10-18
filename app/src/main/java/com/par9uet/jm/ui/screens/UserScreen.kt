@@ -373,6 +373,11 @@ fun UserScreen(
 
             MenuGroup(title = "我的内容") {
                 MenuItem(
+                    icon = Icons.Default.History,
+                    label = "我的阅读与推荐（本地）",
+                    onClick = { mainNavController.navigate("personalLibrary") }
+                )
+                MenuItem(
                     icon = Icons.Default.Download,
                     label = "下载中心",
                     onClick = { mainNavController.navigate("download") }

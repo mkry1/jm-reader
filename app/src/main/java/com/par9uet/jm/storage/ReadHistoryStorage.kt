@@ -5,13 +5,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
-data class ComicReadHistory(
-    val lastChapterId: Int = 0,
-    val readChapterIds: List<Int> = emptyList(),
-    val lastPageIndex: Int = 0,
-    val lastChapterPageCount: Int = 0,
-)
-
 class ReadHistoryStorage(
     private val secureStorage: SecureStorage
 ) {

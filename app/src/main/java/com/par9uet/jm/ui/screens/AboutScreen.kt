@@ -83,6 +83,8 @@ import com.par9uet.jm.store.formatBytes
 import com.par9uet.jm.network.DohManager
 import com.par9uet.jm.ui.components.CommonScaffold
 import com.par9uet.jm.utils.MarkdownText
+import com.par9uet.jm.utils.compareReleaseVersions
+import com.par9uet.jm.utils.normalizeReleaseVersion
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -93,11 +95,11 @@ import java.io.File
 import kotlin.math.roundToInt
 
 private const val GITHUB_RELEASE_API =
-    "https://api.github.com/repos/HongShi2333/jmcomic-next/releases/latest"
+    "https://api.github.com/repos/mkry1/jm-reader/releases/latest"
 private const val GITHUB_RELEASE_URL =
-    "https://github.com/HongShi2333/jmcomic-next/releases"
+    "https://github.com/mkry1/jm-reader/releases"
 private const val GITHUB_REPO_URL =
-    "https://github.com/HongShi2333/jmcomic-next"
+    "https://github.com/mkry1/jm-reader"
 
 private data class GithubRelease(
     val version: String,
@@ -330,7 +332,7 @@ fun CheckUpdateScreen(
                 onSuccess = {
                     UpdateState.Success(
                         release = it,
-                        hasUpdate = compareVersion(it.version, appVersion) > 0
+                        hasUpdate = compareReleaseVersions(it.version, appVersion) > 0
                     )
                 },
                 onFailure = {
@@ -1003,7 +1005,7 @@ private suspend fun fetchLatestRelease(dohManager: DohManager): Result<GithubRel
             val tagName = json.stringOrEmpty("tag_name")
             val name = json.stringOrEmpty("name")
             val url = json.stringOrEmpty("html_url")
-            val version = normalizeVersion(tagName.ifBlank { name })
+            val version = normalizeReleaseVersion(tagName.ifBlank { name })
             if (version.isBlank()) {
                 error("未读取到 Release 版本号")
             }
@@ -1041,26 +1043,6 @@ private fun selectApkAsset(assets: JsonArray?, version: String): ReleaseAsset? {
 
 private fun JsonObject.stringOrEmpty(key: String): String {
     return get(key)?.takeIf { !it.isJsonNull }?.asString.orEmpty()
-}
-
-private fun normalizeVersion(value: String): String {
-    return value.trim()
-        .removePrefix("v")
-        .removePrefix("V")
-        .substringBefore(" ")
-        .substringBefore("-")
-}
-
-private fun compareVersion(left: String, right: String): Int {
-    val leftParts = normalizeVersion(left).split(".").map { it.toIntOrNull() ?: 0 }
-    val rightParts = normalizeVersion(right).split(".").map { it.toIntOrNull() ?: 0 }
-    val count = maxOf(leftParts.size, rightParts.size)
-    for (index in 0 until count) {
-        val l = leftParts.getOrElse(index) { 0 }
-        val r = rightParts.getOrElse(index) { 0 }
-        if (l != r) return l.compareTo(r)
-    }
-    return 0
 }
 
 @Suppress("DEPRECATION")

@@ -18,8 +18,9 @@ class WeekComicPagingSource(
     private val blockedTagList: List<String> = listOf(),
     private val tagFilter: ComicTagFilter? = null,
     private val tagSource: String = "default",
+    private val excludedIds: Set<Int> = emptySet(),
 ) : ComicRemotePagingSource() {
-    override val hasLocalFilters: Boolean get() = blockedTagList.isNotEmpty()
+    override val hasLocalFilters: Boolean get() = blockedTagList.isNotEmpty() || excludedIds.isNotEmpty()
     override suspend fun load(params: LoadParams<Int>): LoadResult<Int, Comic> {
         val currentPage = params.key ?: 1
         if (filter.categoryId == null || filter.typeId == null) {
@@ -39,7 +40,7 @@ class WeekComicPagingSource(
             }
 
             is NetWorkResult.Success<WeekRecommendComicResponse> -> {
-                val candidates = data.data.toComicList().filterBlockedTags(blockedTagList)
+                val candidates = data.data.toComicList().filterBlockedTags(blockedTagList).filter { it.id !in excludedIds }
                 val list = if (blockedTagList.size > 1 && candidates.isNotEmpty()) {
                     (tagFilter ?: ComicTagFilter(comicRepository::getComicDetail))
                         .filter(candidates, blockedTagList, tagSource)

@@ -24,6 +24,25 @@ import org.junit.Test
 
 class SearchComicPagingSourceTest {
     @Test
+    fun publicationRangeUsesUploadDateFromDetailRatherThanUpdateTime() = runBlocking {
+        val repository = FakeComicRepository()
+        val dateCache = com.par9uet.jm.search.PublicationDateCache(
+            fetchDetail = { id ->
+                val detail = (repository.getComicDetail(id) as NetWorkResult.Success).data
+                NetWorkResult.Success(detail.copy(addtime = if (id == 1) "2026-10-18" else "2020-01-01"))
+            },
+            load = { emptyMap() }, persist = {},
+        )
+        val source = SearchComicPagingSource(
+            repository, SearchComicFilter(searchContent = "标签", publicationRange = com.par9uet.jm.search.PublicationRange("2026-10-01", "2026-10-18")),
+            dateCache = dateCache,
+        )
+        val result = source.load(PagingSource.LoadParams.Refresh<Int>(1, 40, false)) as PagingSource.LoadResult.Page
+        assertEquals(listOf(1), result.data.map { it.id })
+        assertEquals(null, result.nextKey)
+    }
+
+    @Test
     fun timedWebsiteAndCategoryRequestsUseTheirActualPageSizes() {
         val repository = FakeComicRepository()
         assertEquals(12, SearchComicPagingSource(repository, SearchComicFilter(
