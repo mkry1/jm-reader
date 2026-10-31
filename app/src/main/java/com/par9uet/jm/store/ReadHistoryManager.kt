@@ -3,6 +3,7 @@ package com.par9uet.jm.store
 import com.par9uet.jm.data.models.Comic
 import com.par9uet.jm.storage.ComicReadHistory
 import com.par9uet.jm.storage.ReadHistoryStorage
+import com.par9uet.jm.storage.ReaderPosition
 import com.par9uet.jm.task.AppInitTask
 import com.par9uet.jm.task.AppTaskInfo
 import com.par9uet.jm.utils.log
@@ -11,9 +12,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 
 class ReadHistoryManager(
-    private val readHistoryStorage: ReadHistoryStorage
+    private val load: () -> Map<Int, ComicReadHistory>,
+    private val persist: (Map<Int, ComicReadHistory>, Boolean) -> Unit,
 ) : AppInitTask {
-    private val _readHistoryState = MutableStateFlow<Map<Int, ComicReadHistory>>(emptyMap())
+    constructor(storage: ReadHistoryStorage) : this(storage::get, { history, sync -> storage.set(history, sync) })
+
+    // 进度恢复不等待登录、远程配置等初始化任务。
+    private val _readHistoryState = MutableStateFlow(load())
     val readHistoryState = _readHistoryState.asStateFlow()
 
     fun historyKey(comic: Comic?, fallbackId: Int): Int {
@@ -32,18 +37,19 @@ class ReadHistoryManager(
         val current = _readHistoryState.value.toMutableMap()
         val old = current[comicKey]
         val readIds = (old?.readChapterIds.orEmpty() + chapterId).distinct()
-        current[comicKey] = ComicReadHistory(
+        current[comicKey] = (old?.takeIf { it.lastChapterId == chapterId } ?: ComicReadHistory()).copy(
             lastChapterId = chapterId,
             readChapterIds = readIds,
-            lastPageIndex = old?.lastPageIndex ?: 0,
-            lastChapterPageCount = old?.lastChapterPageCount ?: 0,
         )
         _readHistoryState.update { current }
-        readHistoryStorage.set(current)
+        persist(current, false)
         return comicKey
     }
 
-    fun saveReadProgress(comicKey: Int, chapterId: Int, pageIndex: Int, pageCount: Int) {
+    fun saveReadProgress(
+        comicKey: Int, chapterId: Int, pageIndex: Int, pageCount: Int,
+        scrollOffset: Int = 0, synchronous: Boolean = false,
+    ) {
         val current = _readHistoryState.value.toMutableMap()
         val old = current[comicKey]
         val readIds = (old?.readChapterIds.orEmpty() + chapterId).distinct()
@@ -52,9 +58,10 @@ class ReadHistoryManager(
             readChapterIds = readIds,
             lastPageIndex = pageIndex,
             lastChapterPageCount = pageCount,
+            lastPageScrollOffset = scrollOffset.coerceAtLeast(0),
         )
         _readHistoryState.update { current }
-        readHistoryStorage.set(current)
+        persist(current, synchronous)
     }
 
     fun readChapterIds(
@@ -80,10 +87,16 @@ class ReadHistoryManager(
         chapterId: Int,
         history: Map<Int, ComicReadHistory> = _readHistoryState.value
     ): Int {
-        val entry = history[comicKey] ?: return 0
-        if (entry.lastChapterId != chapterId) return 0
-        if (entry.lastChapterPageCount <= 0) return 0
-        return entry.lastPageIndex.coerceIn(0, entry.lastChapterPageCount - 1)
+        return lastReadPosition(comicKey, chapterId, history).pageIndex
+    }
+
+    fun lastReadPosition(
+        comicKey: Int, chapterId: Int,
+        history: Map<Int, ComicReadHistory> = _readHistoryState.value,
+    ): ReaderPosition {
+        val entry = history[comicKey] ?: return ReaderPosition()
+        if (entry.lastChapterId != chapterId || entry.lastChapterPageCount <= 0) return ReaderPosition()
+        return ReaderPosition(entry.lastPageIndex, entry.lastPageScrollOffset).bounded(entry.lastChapterPageCount)
     }
 
     /** Finds the persisted series key before chapter detail has finished loading. */
@@ -98,13 +111,13 @@ class ReadHistoryManager(
 
     fun restoreReadHistory(imported: Map<Int, ComicReadHistory>) {
         val merged = imported + _readHistoryState.value
-        readHistoryStorage.set(merged)
+        persist(merged, false)
         _readHistoryState.value = merged
     }
 
     override suspend fun init() {
         log("加载阅读历史")
-        _readHistoryState.update { readHistoryStorage.get() }
+        _readHistoryState.update { load() }
         log("阅读历史已加载")
     }
 

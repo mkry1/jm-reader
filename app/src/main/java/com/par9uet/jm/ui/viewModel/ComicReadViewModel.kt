@@ -28,6 +28,8 @@ import com.par9uet.jm.retrofit.model.ComicPicListResponse
 import com.par9uet.jm.retrofit.model.NetWorkResult
 import com.par9uet.jm.store.LocalSettingManager
 import com.par9uet.jm.store.ReadHistoryManager
+import com.par9uet.jm.storage.ReaderPosition
+import com.par9uet.jm.ui.screens.readScreen.ReaderMemoryWindow
 import com.par9uet.jm.store.ToastManager
 import com.par9uet.jm.ui.models.CommonUIState
 import com.par9uet.jm.utils.log
@@ -35,6 +37,8 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import java.io.File
@@ -68,19 +72,19 @@ class ComicReadViewModel(
 
     val size: Int get() = _comicPicState.value.data?.size ?: 0
 
-    private val prefetchSet = mutableSetOf<Int>()
+    private val memoryWindow = ReaderMemoryWindow()
+    private var visiblePages: IntRange? = null
     // 内存优化模式下的并发解码信号量，按需创建
     private var decodeSemaphore: Semaphore? = null
     private var decodeSemaphorePermits: Int = 0
-    private fun getDecodeSemaphore(): Semaphore? {
+    private fun getDecodeSemaphore(): Semaphore {
         val setting = localSettingManager.localSettingState.value
-        if (!setting.readMemoryOptEnabled) return null
-        val target = setting.readDecodeConcurrency.coerceAtLeast(1)
+        val target = if (setting.readMemoryOptEnabled) setting.readDecodeConcurrency.coerceIn(1, 4) else 3
         if (decodeSemaphore == null || decodeSemaphorePermits != target) {
             decodeSemaphore = Semaphore(target)
             decodeSemaphorePermits = target
         }
-        return decodeSemaphore
+        return requireNotNull(decodeSemaphore)
     }
 
     fun getComicDetail(comicId: Int) {
@@ -163,7 +167,8 @@ class ComicReadViewModel(
                     errorMsg = ""
                 )
             }
-            prefetchSet.clear()
+            memoryWindow.clear()
+            visiblePages = null
             when (val data = comicRepository.getComicPicList(comicId, shunt)) {
                 is NetWorkResult.Error -> {
                     _comicPicState.update {
@@ -211,13 +216,13 @@ class ComicReadViewModel(
         comicId: Int,
         shunt: String,
         restoreReadingMemory: Boolean,
-        onSuccess: (savedPageIndex: Int) -> Unit,
+        onSuccess: (savedPosition: ReaderPosition) -> Unit,
     ) {
         val historyComicKey = readHistoryManager.historyKeyForChapter(comicId)
         val savedPageIndex = if (restoreReadingMemory) {
-            readHistoryManager.lastReadPageIndex(historyComicKey, comicId)
+            readHistoryManager.lastReadPosition(historyComicKey, comicId)
         } else {
-            0
+            ReaderPosition()
         }
         readHistoryComicId.intValue = historyComicKey
         getComicDetail(comicId)
@@ -230,7 +235,7 @@ class ComicReadViewModel(
         comicId: Int,
         context: Context,
         restoreReadingMemory: Boolean,
-        onSuccess: ((savedPageIndex: Int) -> Unit)? = null,
+        onSuccess: ((savedPosition: ReaderPosition) -> Unit)? = null,
     ) {
         viewModelScope.launch {
             _comicPicState.update {
@@ -240,13 +245,14 @@ class ComicReadViewModel(
                     errorMsg = ""
                 )
             }
-            prefetchSet.clear()
+            memoryWindow.clear()
+            visiblePages = null
             val downloadComic = downloadComicDao.getById(comicId)
             val groupId = downloadComic?.groupId?.takeIf { it != 0 } ?: comicId
             val savedPageIndex = if (restoreReadingMemory) {
-                readHistoryManager.lastReadPageIndex(groupId, comicId)
+                readHistoryManager.lastReadPosition(groupId, comicId)
             } else {
-                0
+                ReaderPosition()
             }
             readHistoryComicId.intValue = groupId
             loadLocalChapterList(comicId, downloadComic)
@@ -381,6 +387,8 @@ class ComicReadViewModel(
 
     fun decodeIndex(index: Int, context: Context) {
         if (size <= 0 || index !in 0 until size) return
+        if (visiblePages?.contains(index) != true) visiblePages = index..index
+        retainVisiblePages(localSettingManager.localSettingState.value.prefetchCount)
         log("decode index $index")
         val count = localSettingManager.localSettingState.value.prefetchCount
         val start = max(0, index - count)
@@ -399,6 +407,8 @@ class ComicReadViewModel(
 
     fun decodeVisibleRange(firstIndex: Int, lastIndex: Int, context: Context) {
         if (size <= 0) return
+        visiblePages = firstIndex.coerceIn(0, size - 1)..lastIndex.coerceIn(0, size - 1)
+        retainVisiblePages(localSettingManager.localSettingState.value.prefetchCount)
         val count = localSettingManager.localSettingState.value.prefetchCount
         val start = max(0, min(firstIndex, lastIndex) - count)
         val end = min(size - 1, max(firstIndex, lastIndex) + count)
@@ -424,29 +434,48 @@ class ComicReadViewModel(
     }
 
     private fun decode(index: Int, context: Context, onComplete: (() -> Unit)? = null) {
+        if (index !in memoryWindow.retainedRange) return
         val comicPicImageState = comicPicState.value.data?.getOrNull(index) ?: return
-        if (prefetchSet.contains(index)) {
+        if (memoryWindow.contains(index)) {
             onComplete?.invoke()
             return
         }
         val setting = localSettingManager.localSettingState.value
         val downscale = setting.readMemoryOptEnabled
         val semaphore = getDecodeSemaphore()
-        viewModelScope.launch {
+        val job = viewModelScope.launch(start = CoroutineStart.LAZY) {
             try {
-                if (semaphore != null) {
-                    semaphore.withPermit {
-                        comicPicImageState.decode(context, downscale = downscale)
-                    }
-                } else {
-                    comicPicImageState.decode(context, downscale = false)
+                semaphore.withPermit {
+                    comicPicImageState.decode(context.applicationContext, downscale = downscale)
                 }
+            } catch (e: CancellationException) {
+                throw e
             } catch (e: Exception) {
                 log("decode index $index failed: ${e.message}")
+            } finally {
+                // 同步位图解码可能在取消后才返回，防止它重新填充已经逐出的页面。
+                if (index !in memoryWindow.retainedRange) comicPicImageState.releaseDecodedImage()
             }
-            onComplete?.invoke()
+            if (index in memoryWindow.retainedRange && comicPicState.value.data?.getOrNull(index) === comicPicImageState) {
+                onComplete?.invoke()
+            }
         }
-        prefetchSet.add(index)
+        memoryWindow.register(index) { job.cancel(); comicPicImageState.releaseDecodedImage() }
+        job.start()
+    }
+
+    private fun retainVisiblePages(prefetch: Int) {
+        val visible = visiblePages ?: return
+        memoryWindow.retain(size, visible.first, visible.last, prefetch.coerceAtLeast(0))
+    }
+
+    fun trimReaderMemory() {
+        retainVisiblePages(0)
+    }
+
+    override fun onCleared() {
+        memoryWindow.clear()
+        super.onCleared()
     }
 
     fun triggerToolBar() {

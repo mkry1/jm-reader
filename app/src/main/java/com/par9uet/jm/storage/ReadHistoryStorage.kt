@@ -15,9 +15,9 @@ class ReadHistoryStorage(
     private val _state = MutableStateFlow<Map<Int, ComicReadHistory>?>(null)
     val state = _state.asStateFlow()
 
-    fun set(history: Map<Int, ComicReadHistory>) {
+    fun set(history: Map<Int, ComicReadHistory>, synchronous: Boolean = false) {
         _state.update { history }
-        secureStorage.set(STORAGE_KEY, history)
+        secureStorage.set(STORAGE_KEY, history, synchronous)
     }
 
     fun get(): Map<Int, ComicReadHistory> {

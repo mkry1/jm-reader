@@ -5,7 +5,6 @@ import androidx.compose.foundation.gestures.awaitFirstDown
 import androidx.compose.foundation.gestures.waitForUpOrCancellation
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.PagerState
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,9 +34,8 @@ private const val CLICK_PAGE_TURN_ANIMATION_MS = 60
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ComicPageRead(
-    lazyListState: LazyListState,
     pagerState: PagerState,
-    targetIndex: Int,
+    positionReady: Boolean,
     zoomState: ReaderZoomState,
     comicReadViewModel: ComicReadViewModel = koinViewModel(),
     tapOnly: Boolean = false,
@@ -63,24 +61,18 @@ fun ComicPageRead(
             return@LaunchedEffect
         }
         isProgrammaticScroll = true
-        pagerState.animateScrollToPage(
-            page = target,
-            animationSpec = tween(durationMillis = CLICK_PAGE_TURN_ANIMATION_MS)
-        )
-        currentIndexState = target
-        onUpdateSliderValue(target.toFloat())
-        comicReadViewModel.decodeIndex(target, context)
-        isProgrammaticScroll = false
-        clickTargetIndex = -1
-    }
-
-    LaunchedEffect(targetIndex, list.size) {
-        if (list.isEmpty()) return@LaunchedEffect
-        val target = targetIndex.coerceIn(0, list.lastIndex)
-        if (target == pagerState.currentPage) return@LaunchedEffect
-        isProgrammaticScroll = true
-        pagerState.animateScrollToPage(target)
-        isProgrammaticScroll = false
+        try {
+            pagerState.animateScrollToPage(
+                page = target,
+                animationSpec = tween(durationMillis = CLICK_PAGE_TURN_ANIMATION_MS)
+            )
+            currentIndexState = target
+            onUpdateSliderValue(target.toFloat())
+            comicReadViewModel.decodeIndex(target, context)
+        } finally {
+            isProgrammaticScroll = false
+            clickTargetIndex = -1
+        }
     }
 
     LaunchedEffect(pagerState) {
@@ -91,7 +83,8 @@ fun ComicPageRead(
             }
     }
 
-    LaunchedEffect(pagerState) {
+    LaunchedEffect(pagerState, positionReady) {
+        if (!positionReady) return@LaunchedEffect
         snapshotFlow { pagerState.currentPage }
             .filterNot { isProgrammaticScroll }
             .collect { newPage ->
@@ -108,7 +101,7 @@ fun ComicPageRead(
         .readerZoomable(zoomState)
 
     val clickModifier = if (tapOnly) {
-        Modifier.pointerInput(Unit) {
+        Modifier.pointerInput(positionReady) {
             awaitPointerEventScope {
                 while (true) {
                     val down = awaitFirstDown(
@@ -118,7 +111,7 @@ fun ComicPageRead(
                     val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
                     if (up != null && !up.isConsumed) {
                         val distance = (up.position - down.position).getDistance()
-                        if (distance < 10.dp.toPx()) {
+                        if (positionReady && distance < 10.dp.toPx()) {
                             val screenWidth = size.width
                             val clickX = up.position.x
 
@@ -147,7 +140,7 @@ fun ComicPageRead(
             }
         }
     } else {
-        Modifier.pointerInput(Unit) {
+        Modifier.pointerInput(positionReady) {
             awaitPointerEventScope {
                 while (true) {
                     val down = awaitFirstDown(
@@ -157,7 +150,7 @@ fun ComicPageRead(
                     val up = waitForUpOrCancellation(pass = PointerEventPass.Final)
                     if (up != null && !up.isConsumed) {
                         val distance = (up.position - down.position).getDistance()
-                        if (distance < 10.dp.toPx()) {
+                        if (positionReady && distance < 10.dp.toPx()) {
                             val screenWidth = size.width
                             val clickX = up.position.x
 
@@ -190,7 +183,7 @@ fun ComicPageRead(
     HorizontalPager(
         modifier = readerModifier.then(clickModifier),
         state = pagerState,
-        userScrollEnabled = !tapOnly && !zoomState.isZoomed
+        userScrollEnabled = positionReady && !tapOnly && !zoomState.isZoomed
     ) { page ->
         val item = list.getOrNull(page) ?: return@HorizontalPager
         Box(modifier = Modifier.fillMaxSize()) {

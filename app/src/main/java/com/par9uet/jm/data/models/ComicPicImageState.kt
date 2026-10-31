@@ -62,6 +62,11 @@ class ComicPicImageState(
 
     var imageResultState by mutableStateOf<ImageResultState>(ImageResultState.Loading)
 
+    fun releaseDecodedImage() {
+        // 不主动 recycle：当前帧可能仍在绘制，撤销引用后交给系统回收。
+        imageResultState = ImageResultState.Loading
+    }
+
     suspend fun decode(
         context: Context,
         downscale: Boolean = false,

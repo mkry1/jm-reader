@@ -14,9 +14,9 @@ class SecureStorage(
     val sharedPreferences: SharedPreferences =
         context.getSharedPreferences("jm-mobile-g-data", Context.MODE_PRIVATE)
 
-    fun <T> set(key: String, t: T) {
+    fun <T> set(key: String, t: T, synchronous: Boolean = false) {
         val json = gson.toJson(t)
-        sharedPreferences.edit {
+        sharedPreferences.edit(commit = synchronous) {
             putString(key, cryptoManager.encrypt(json))
         }
     }

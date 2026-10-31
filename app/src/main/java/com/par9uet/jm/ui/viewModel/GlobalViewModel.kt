@@ -7,14 +7,17 @@ import com.par9uet.jm.store.InitManager
 import com.par9uet.jm.task.AppInitTask
 import com.par9uet.jm.utils.log
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 
 class GlobalViewModel(
     private val appInitTaskList: List<AppInitTask>,
     private val initManager: InitManager
 ) : ViewModel() {
+    private var initializationJob: Job? = null
 
     fun init() {
-        viewModelScope.launch {
+        if (initManager.deferred.isCompleted || initializationJob?.isActive == true) return
+        initializationJob = viewModelScope.launch {
             // 任一任务异常不能阻塞 deferred 完成，否则会导致永久黑屏
             appInitTaskList.sortedBy { it.getAppTaskInfo().sort }.forEach { task ->
                 try {

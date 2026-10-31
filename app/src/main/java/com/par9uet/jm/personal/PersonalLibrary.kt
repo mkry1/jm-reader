@@ -49,7 +49,7 @@ fun decodePersonalBackup(json: String): PersonalBackup {
         }
         for ((id, progress) in backup.readHistory) {
             requireNotNull(progress) { "备份阅读进度为空" }
-            require(id > 0 && progress.lastChapterId >= 0 && progress.lastPageIndex >= 0 && progress.lastChapterPageCount >= 0) { "备份阅读进度不正确" }
+            require(id > 0 && progress.lastChapterId >= 0 && progress.lastPageIndex >= 0 && progress.lastChapterPageCount >= 0 && progress.lastPageScrollOffset >= 0) { "备份阅读进度不正确" }
             requireNotNull(progress.readChapterIds) { "备份章节记录为空" }
             require(progress.readChapterIds.all { it > 0 }) { "备份章节编号不正确" }
         }

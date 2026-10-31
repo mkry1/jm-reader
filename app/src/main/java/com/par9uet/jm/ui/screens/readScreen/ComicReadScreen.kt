@@ -55,6 +55,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.snapshotFlow
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.shadow
@@ -71,6 +75,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import com.par9uet.jm.data.models.Comic
 import com.par9uet.jm.data.models.ComicChapter
+import com.par9uet.jm.data.models.ImageResultState
+import com.par9uet.jm.storage.ReaderPosition
 import com.par9uet.jm.store.DownloadManager
 import com.par9uet.jm.store.LocalSettingManager
 import com.par9uet.jm.store.ReadHistoryManager
@@ -81,8 +87,12 @@ import com.par9uet.jm.ui.viewModel.ComicReadViewModel
 import com.par9uet.jm.utils.VolumeKeyPageTurnDispatcher
 import org.koin.androidx.compose.koinViewModel
 import org.koin.compose.getKoin
+import kotlinx.coroutines.FlowPreview
+import kotlinx.coroutines.flow.debounce
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, FlowPreview::class)
 @Composable
 fun ComicReadScreen(
     comicId: Int,
@@ -125,6 +135,8 @@ fun ComicReadScreen(
     val pagerState = rememberPagerState(initialPage = initialReaderIndex) { size }
     val zoomState = rememberReaderZoomState()
     var targetIndex by remember { mutableIntStateOf(initialReaderIndex) }
+    var targetOffset by remember(comicId, localOnly) { mutableIntStateOf(0) }
+    val progressSession = remember(comicId, localOnly) { ReaderProgressSession(comicId) }
     var activeDialog by remember { mutableStateOf<ReadPanelDialog?>(null) }
     var selectedCacheChapterIds by remember { mutableStateOf<Set<Int>>(emptySet()) }
     var loadedComicId by comicReadViewModel.loadedComicId
@@ -186,6 +198,7 @@ fun ComicReadScreen(
         zoomState.reset()
         currentIndexState = target
         targetIndex = target
+        targetOffset = 0
         comicReadViewModel.decodeIndex(target, context)
         comicReadViewModel.showToolBar()
     }
@@ -205,21 +218,26 @@ fun ComicReadScreen(
         }
     }
 
-    LaunchedEffect(comicId) {
+    LaunchedEffect(comicId, localOnly) {
         val readingMemoryEnabled = localSetting.comicReadingMemoryEnabled
-        val onSuccess: (Int) -> Unit = { savedIndex ->
-            if (loadedComicId != comicId || !readingMemoryEnabled) {
-                // Read the ViewModel state directly: composition can still hold
-                // the old zero page count in the frame where data arrives.
-                val restoredIndex = savedIndex.coerceIn(0, maxOf(0, comicReadViewModel.size - 1))
-                currentIndexState = restoredIndex
-                targetIndex = restoredIndex
-                loadedComicId = comicId
-            } else {
-                targetIndex = currentIndexState.coerceAtLeast(0)
-            }
+        progressSession.startRestoring()
+        val onSuccess: (ReaderPosition) -> Unit = { saved ->
+            val position = (if (loadedComicId == comicId && readingMemoryEnabled) {
+                saved.copy(pageIndex = currentIndexState)
+            } else saved).bounded(comicReadViewModel.size)
+            currentIndexState = position.pageIndex
+            targetIndex = position.pageIndex
+            targetOffset = if (localSetting.readMode == "scroll") position.scrollOffset else 0
+            loadedComicId = comicId
             zoomState.reset()
             comicReadViewModel.decodeIndex(targetIndex, context)
+        }
+        val currentPages = comicReadViewModel.comicPicState.value
+        if (loadedComicId == comicId && !currentPages.isLoading && !currentPages.isError && !currentPages.data.isNullOrEmpty()) {
+            // Activity/页面重建但 ViewModel 仍存活时，复用已加载的章节。
+            val saved = if (readingMemoryEnabled) readHistoryManager.lastReadPosition(readHistoryComicId, comicId) else ReaderPosition()
+            onSuccess(saved)
+            return@LaunchedEffect
         }
         if (localOnly) {
             comicReadViewModel.clearComicDetail()
@@ -239,33 +257,91 @@ fun ComicReadScreen(
         }
     }
 
-    // 退出阅读时保存当前页数进度
-    val latestPageIndex by rememberUpdatedState(currentIndexState)
-    val latestPageCount by rememberUpdatedState(size)
-    val latestHistoryComicId by rememberUpdatedState(readHistoryComicId)
-    val latestReadingMemoryEnabled by rememberUpdatedState(localSetting.comicReadingMemoryEnabled)
-    DisposableEffect(comicId) {
-        onDispose {
-            if (latestReadingMemoryEnabled && latestPageCount > 0 && latestHistoryComicId > 0) {
-                readHistoryManager.saveReadProgress(
-                    latestHistoryComicId,
-                    comicId,
-                    latestPageIndex,
-                    latestPageCount
-                )
-            }
+    fun currentPosition(): ReaderPosition = if (localSettingManager.localSettingState.value.readMode == "scroll") {
+        ReaderPosition(lazyListState.firstVisibleItemIndex, lazyListState.firstVisibleItemScrollOffset)
+    } else ReaderPosition(pagerState.currentPage)
+
+    val saveCheckpoint = rememberUpdatedState<(Boolean) -> Unit> { synchronous ->
+        val state = comicReadViewModel.comicPicState.value
+        val historyKey = comicReadViewModel.readHistoryComicId.intValue
+        val position = progressSession.checkpoint(
+            comicReadViewModel.loadedComicId.intValue,
+            comicReadViewModel.size,
+            currentPosition(),
+        )
+        val settings = localSettingManager.localSettingState.value
+        if (settings.comicReadingMemoryEnabled && progressSession.readerMode == settings.readMode && !state.isLoading && historyKey > 0 && position != null) {
+            readHistoryManager.saveReadProgress(
+                historyKey, comicId, position.pageIndex, comicReadViewModel.size,
+                scrollOffset = position.scrollOffset, synchronous = synchronous,
+            )
         }
     }
 
-    // 数据加载完成后，滚动到恢复的页码
-    LaunchedEffect(size, loadedComicId) {
-        if (size > 0 && loadedComicId == comicId && targetIndex in 0 until size) {
-            if (localSetting.readMode == "scroll") {
-                lazyListState.scrollToItem(targetIndex)
-            } else {
-                pagerState.scrollToPage(targetIndex)
+    // 正常阅读时持续做检查点；滚动停止后保存偏移，后台时不依赖 onDispose。
+    LaunchedEffect(comicId, localOnly, progressSession.restored, loading, size, localSetting.readMode, localSetting.comicReadingMemoryEnabled) {
+        if (!progressSession.restored || loading || !localSetting.comicReadingMemoryEnabled) return@LaunchedEffect
+        snapshotFlow { comicReadViewModel.readHistoryComicId.intValue to currentPosition() }
+            .distinctUntilChanged()
+            .debounce(if (localSetting.readMode == "scroll") 300L else 0L)
+            .collect { saveCheckpoint.value(false) }
+    }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner, comicId, localOnly) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                saveCheckpoint.value(true)
+                comicReadViewModel.trimReaderMemory()
+            } else if (event == Lifecycle.Event.ON_RESUME && progressSession.restored) {
+                if (localSettingManager.localSettingState.value.readMode == "scroll") {
+                    val visible = lazyListState.layoutInfo.visibleItemsInfo
+                    if (visible.isNotEmpty()) comicReadViewModel.decodeVisibleRange(visible.first().index, visible.last().index, context)
+                } else comicReadViewModel.decodeIndex(pagerState.currentPage, context)
             }
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            saveCheckpoint.value(true)
+        }
+    }
+
+    // 页面真正定位完成后才允许写进度，避免第一个布局帧的 0 覆盖旧记录。
+    LaunchedEffect(comicId, loading, size, loadedComicId, targetIndex, targetOffset, localSetting.readMode) {
+        if (loading || size <= 0 || loadedComicId != comicId) {
+            progressSession.startRestoring()
+            return@LaunchedEffect
+        }
+        val visible = if (progressSession.readerMode == "scroll") {
+            ReaderPosition(lazyListState.firstVisibleItemIndex, lazyListState.firstVisibleItemScrollOffset)
+        } else ReaderPosition(pagerState.currentPage)
+        val position = progressSession.targetForRestore(
+            localSetting.readMode, ReaderPosition(targetIndex, targetOffset), visible,
+        ).bounded(size)
+        progressSession.startRestoring()
+        targetIndex = position.pageIndex
+        targetOffset = position.scrollOffset
+        if (localSetting.readMode == "scroll") {
+            snapshotFlow { lazyListState.layoutInfo.totalItemsCount }.first { it == size }
+            lazyListState.scrollToItem(position.pageIndex)
+            if (position.scrollOffset > 0) {
+                // 长图占位高度与真实高度可能不同，等解码后再恢复图内偏移。
+                val image = comicReadViewModel.comicPicState.value.data?.getOrNull(position.pageIndex)
+                if (image != null) {
+                    val decoded = snapshotFlow { image.imageResultState }
+                        .first { it is ImageResultState.Success || it is ImageResultState.Failure }
+                    if (decoded is ImageResultState.Success) {
+                        val measured = snapshotFlow {
+                            val layout = lazyListState.layoutInfo
+                            layout.viewportSize.width to (layout.visibleItemsInfo.firstOrNull { it.index == position.pageIndex }?.size ?: 0)
+                        }.first { (width, height) -> readerImageLayoutReady(width, height, decoded.decodeImageAspectRatio) }
+                        lazyListState.scrollToItem(position.pageIndex, position.scrollOffset.coerceAtMost((measured.second - 1).coerceAtLeast(0)))
+                    }
+                }
+            }
+        } else pagerState.scrollToPage(position.pageIndex)
+        currentIndexState = position.pageIndex
+        progressSession.finishRestoring()
     }
 
     val view = LocalView.current
@@ -310,17 +386,15 @@ fun ComicReadScreen(
                 if (localSetting.readMode == "scroll") {
                     ComicScrollRead(
                         lazyListState = lazyListState,
-                        pagerState = pagerState,
-                        targetIndex = targetIndex,
+                        positionReady = progressSession.restored && progressSession.readerMode == localSetting.readMode,
                         zoomState = zoomState,
                         comicReadViewModel = comicReadViewModel,
                         onUpdateSliderValue = { updateIndexFromReader(it) }
                     )
                 } else {
                     ComicPageRead(
-                        lazyListState = lazyListState,
                         pagerState = pagerState,
-                        targetIndex = targetIndex,
+                        positionReady = progressSession.restored && progressSession.readerMode == localSetting.readMode,
                         zoomState = zoomState,
                         comicReadViewModel = comicReadViewModel,
                         tapOnly = localSetting.readMode == "tap",

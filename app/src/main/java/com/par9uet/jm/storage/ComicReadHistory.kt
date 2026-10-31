@@ -5,4 +5,5 @@ data class ComicReadHistory(
     val readChapterIds: List<Int> = emptyList(),
     val lastPageIndex: Int = 0,
     val lastChapterPageCount: Int = 0,
+    val lastPageScrollOffset: Int = 0,
 )

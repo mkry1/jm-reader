@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.pager.PagerState
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -42,8 +41,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ComicScrollRead(
     lazyListState: LazyListState,
-    pagerState: PagerState,
-    targetIndex: Int,
+    positionReady: Boolean,
     zoomState: ReaderZoomState,
     comicReadViewModel: ComicReadViewModel = koinViewModel(),
     localSettingManager: LocalSettingManager = getKoin().get(),
@@ -62,21 +60,12 @@ fun ComicScrollRead(
             .coerceIn(0, list.lastIndex)
         coroutineScope.launch {
             lazyListState.scrollToItem(target)
-            pagerState.scrollToPage(target)
             latestOnUpdateSliderValue.value(target.toFloat())
         }
     }
 
-    LaunchedEffect(targetIndex, list.size) {
-        if (list.isEmpty()) return@LaunchedEffect
-        val target = targetIndex.coerceIn(0, list.lastIndex)
-        if (lazyListState.firstVisibleItemIndex != target) {
-            lazyListState.scrollToItem(target)
-            pagerState.scrollToPage(target)
-        }
-    }
-
-    LaunchedEffect(lazyListState) {
+    LaunchedEffect(lazyListState, positionReady, list) {
+        if (!positionReady || list.isEmpty()) return@LaunchedEffect
         launch {
             snapshotFlow { lazyListState.isScrollInProgress }
                 .filter { it }
@@ -119,7 +108,7 @@ fun ComicScrollRead(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(localSetting.readTapMode) {
+            .pointerInput(localSetting.readTapMode, positionReady) {
                 awaitPointerEventScope {
                     while (true) {
                         // 1. 在 Initial 阶段观察按下，不消耗事件，确保 Pager 能收到
@@ -133,7 +122,7 @@ fun ComicScrollRead(
                         // 3. 判定逻辑：只有在没被消费（说明不是滑动）且距离很短时触发
                         if (up != null && !up.isConsumed) {
                             val distance = (up.position - down.position).getDistance()
-                            if (distance < 10.dp.toPx()) {
+                            if (positionReady && distance < 10.dp.toPx()) {
                                 // --- 获取点击位置 ---
                                 val screenHeight = size.height
                                 val screenWidth = size.width
@@ -173,7 +162,7 @@ fun ComicScrollRead(
     ) {
         LazyColumn(
             state = lazyListState,
-            userScrollEnabled = !zoomState.isZoomed,
+            userScrollEnabled = positionReady && !zoomState.isZoomed,
             modifier = Modifier
                 .fillMaxSize()
                 .readerZoomable(zoomState, enableVerticalPan = false) {
